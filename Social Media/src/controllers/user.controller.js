@@ -73,6 +73,92 @@ const registerUser = asyncHandler(async (req, res) => {
 });
 
 
+// User logging in
+const loginUser = asyncHandler(async (req, res, next) => {
+  // 1. Get user details
+  const {username, email, password} = req.body
+  if(!(username || email)) {
+    throw new ApiError(400, "Username or email is required")
+  }
+
+  // 2. Check if user with giver username/email present in db
+  const user = await User.findOne({
+    $or: [{username}, {email}]
+  })
+  if(!user) {
+    throw new ApiError(404, "User with this username or email does not exists")
+  }
+
+  // 3. Check if password is correct
+  const isPasswordValid = await user.isPasswordCorrect(password)
+  if(!isPasswordValid) {
+    throw new ApiError(401, "Invalid user credentials")
+  }
+
+  // 4. Generate access and refresh tokens
+  const {accessToken, refreshToken} = await generateAccessAndRefreshToken(user._id)
+
+  // 5. Sending response (user data and cookies) back to client
+  delete user.password
+  user.refreshToken = refreshToken
+  const cookieOptions = {
+    httpOnly: true,
+    secure: true
+  }
+
+  return res
+  .status(200)
+  .cookie("accessToken", accessToken, cookieOptions)
+  .cookie("refreshToken", refreshToken, cookieOptions)
+  .json(
+    new ApiResponse(200, {user, accessToken, refreshToken}, "User logged in successfully")
+  )
+})
+
+
+// User logout
+const logoutUser = asyncHandler(async (req, res) => {
+  // 1. Remove refresh token from db
+  await User.findByIdAndUpdate(
+    req.user._id,
+    {
+      $set: { refreshToken: undefined }
+    },
+    {
+      returnDocument: 'after'
+    }
+  )
+
+  // 2. Remove cookies and send response
+  const cookieOptions = {
+    httpOnly: true,
+    secure: true
+  }
+
+  return res
+  .status(200)
+  .clearCookie("accessToken", cookieOptions)
+  .clearCookie("refreshToken", cookieOptions)
+  .json(new ApiResponse(200, {}, "User logged out successfully"))
+})
+
+
+
+const generateAccessAndRefreshToken = async (userId) => {
+  try {
+    const user = await User.findById(userId)
+    const accessToken = user.generateAccessToken()
+    const refreshToken = user.generateRefreshToken()
+
+    user.refreshToken = refreshToken
+    await user.save({ validateBeforeSave: false })
+
+    return { accessToken, refreshToken }
+     
+  } catch (error) {
+    throw new ApiError(500, "Something went wrong while generating access and refresh tokens")
+  }
+}
 
 
 function validateEmail(email) {
@@ -80,4 +166,4 @@ function validateEmail(email) {
   return regex.test(email);
 }
 
-export { registerUser };
+export { registerUser, loginUser, logoutUser };
